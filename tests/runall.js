@@ -1,0 +1,75 @@
+(async () => {
+  const FX = '';
+  const report = { ok: [], fail: [] };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const { TOOLS } = window.__app.tools;
+  const ui = window.__app.ui;
+  const load = async (n, raw) => { const d = await testApi.read(FX + n); const f = ui.makeFile(n, d, FX + n); if (n.endsWith('.pdf') && !raw) await ui.preparePdf(f); return f; };
+  const opt = (tool, files, o) => { const v = {}; const list = typeof tool.options === 'function' ? tool.options(files, v) : (tool.options || []); for (const x of list) if (x.default !== undefined) v[x.id] = x.default; return Object.assign(v, o); };
+  async function t(label, id, names, o = {}) {
+    const tool = TOOLS.find((x) => x.id === id);
+    const t0 = performance.now();
+    try {
+      const files = [];
+      for (const n of names) files.push(typeof n === 'string' ? await load(n, tool.raw) : n);
+      const opts = opt(tool, files, o);
+      for (const [k, v] of Object.entries(opts)) if (typeof v === 'string' && v.startsWith('@fx:')) opts[k] = await load(v.slice(4));
+      let r = await tool.run({ files, opts, progress: () => {} });
+      if (Array.isArray(r)) r = { files: r };
+      const names2 = [];
+      for (const f of r.files) { const n = label + '__' + f.name; await testApi.write(n, f.data); names2.push(n + ' (' + f.data.length + ')'); }
+      report.ok.push({ label, ms: Math.round(performance.now() - t0), files: names2, msg: r.message || '', stats: r.stats || '' });
+    } catch (e) { report.fail.push({ label, err: String(e && e.stack || e) }); }
+  }
+  await t('merge', 'merge', ['doc.pdf', 'photo.jpg', 'scan.pdf']);
+  await t('split_each', 'split', ['doc.pdf']);
+  await t('split_every', 'split', ['doc.pdf'], { mode: 'every', n: 4 });
+  await t('split_ranges', 'split', ['doc.pdf'], { mode: 'ranges', ranges: '1-2, 3-' });
+  await t('split_size', 'split', ['doc.pdf'], { mode: 'size', maxMb: 0.2 });
+  await t('nup4', 'nup', ['rotated.pdf'], { n: 4, border: true });
+  await t('nup2', 'nup', ['doc.pdf'], { n: 2 });
+  await t('create', 'create', ['test.docx', 'test.xlsx', 'test.pptx', 'test.txt', 'test.html', 'photo.png', 'doc_v2.pdf']);
+  await t('word2pdf', 'word2pdf', ['test.docx']);
+  await t('excel2pdf', 'excel2pdf', ['test.xlsx']);
+  await t('ppt2pdf', 'ppt2pdf', ['test.pptx']);
+  await t('html2pdf', 'html2pdf', ['test.html']);
+  await t('txt2pdf', 'txt2pdf', ['test.txt']);
+  await t('img2pdf', 'img2pdf', ['photo.jpg', 'photo.png', 'scan.png']);
+  await t('img2pdf_each', 'img2pdf', ['photo.jpg', 'scan.png'], { each: true, pageSize: 'image' });
+  await t('pdf2word_text', 'pdf2word', ['doc.pdf']);
+  await t('pdf2word_textimg', 'pdf2word', ['doc.pdf'], { mode: 'textimg' });
+  await t('pdf2word_img', 'pdf2word', ['doc_v2.pdf'], { mode: 'image' });
+  await t('pdf2excel', 'pdf2excel', ['doc.pdf']);
+  await t('pdf2ppt', 'pdf2ppt', ['doc_v2.pdf']);
+  await t('pdf2img_jpg', 'pdf2img', ['doc.pdf'], { pages: '1-2' });
+  await t('pdf2img_png', 'pdf2img', ['rotated.pdf'], { format: 'png', dpi: 72, pages: '2' });
+  await t('extractimages', 'extractimages', ['doc.pdf']);
+  await t('pdf2txt', 'pdf2txt', ['doc.pdf']);
+  await t('pdf2html', 'pdf2html', ['doc_v2.pdf']);
+  await t('pdfa', 'pdfa', ['doc_v2.pdf']);
+  await t('wm_text', 'watermark', ['rotated.pdf'], { text: 'ENTWURF Ü' });
+  await t('wm_tile', 'watermark', ['doc_v2.pdf'], { layout: 'tile', rotation: -45, text: 'VERTRAULICH' });
+  await t('wm_img', 'watermark', ['doc_v2.pdf'], { type: 'image', image: '@fx:photo.png', layout: 'pos', pos: 'tr', rotation: 0, below: true });
+  await t('pagenum', 'pagenumbers', ['rotated.pdf'], { format: 'Seite {n} von {total}', from: 2 });
+  await t('headerfooter', 'headerfooter', ['doc_v2.pdf']);
+  await t('overlay_bg', 'overlay', ['doc.pdf'], { stationery: '@fx:doc_v2.pdf', mode: 'below', repeat: 'match' });
+  await t('overlay_fg', 'overlay', ['rotated.pdf'], { stationery: '@fx:scan.pdf', mode: 'above' });
+  await t('crop_auto', 'crop', ['rotated.pdf'], { mode: 'auto' });
+  await t('crop_manual', 'crop', ['doc_v2.pdf'], { mode: 'manual', top: 20, bottom: 20, left: 15, right: 15 });
+  await t('resize', 'resize', ['rotated.pdf'], { size: 'A5' });
+  await t('flatten', 'flatten', ['doc_v2.pdf']);
+  await t('compress', 'compress', ['doc.pdf']);
+  await t('compress_custom', 'compress', ['doc.pdf'], { preset: 'custom', dpi: 72, quality: 40, gray: true });
+  await t('optimize', 'optimize', ['doc.pdf']);
+  await t('grayscale', 'grayscale', ['doc.pdf']);
+  await t('removeblank', 'removeblank', ['doc.pdf']);
+  await t('ocr', 'ocr', ['scan.pdf'], { langs: 'deu' });
+  await t('ocr_img', 'ocr', ['scan.png'], { langs: 'deu+eng', dpi: 200 });
+  await t('ocr_rot', 'ocr', ['rotated.pdf'], { langs: 'deu', skip: false, dpi: 200 });
+  await t('repair', 'repair', ['doc.pdf']);
+  await t('encrypt', 'encrypt', ['doc_v2.pdf'], { pw: 'abc', pw2: 'abc', restrict: true, allowPrint: false });
+  await t('unlock_user', 'unlock', ['enc_user.pdf'], { pw: 'geheim123' });
+  await t('unlock_owner', 'unlock', ['enc_owner.pdf']);
+  await t('prepare_owner_then_merge', 'merge', ['enc_owner.pdf', 'doc_v2.pdf']);
+  await testApi.done(report);
+})().catch((e) => testApi.done({ fatal: String(e && e.stack || e) }));

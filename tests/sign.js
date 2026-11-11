@@ -1,0 +1,26 @@
+(async () => {
+  const R = { ok: [], fail: [] };
+  const native = window.__app.native;
+  const step = async (label, fn) => { const t0 = performance.now(); try { const msg = await fn(); R.ok.push({ label, ms: Math.round(performance.now() - t0), msg: msg || '' }); } catch (e) { R.fail.push({ label, err: String(e && e.stack || e) }); } };
+  const pdf = await testApi.read('doc.pdf');
+  let id;
+  await step('cert create', async () => { id = await native.certs.create({ name: 'Henning Köpchen', email: 'test@example.com', organization: 'Köpchen Immobilien', city: 'Hannover', password: 'geheim1', years: 3 }); return String(id); });
+  await step('cert list', async () => { const l = await native.certs.list(); if (l.length !== 1) throw new Error('n=' + l.length); return l[0].fingerprint; });
+  await step('wrong password', async () => { const r = await native.certs.checkPassword(id, 'falsch'); if (r.ok || !r.wrongPassword) throw new Error(JSON.stringify(r)); });
+  const c = document.createElement('canvas'); c.width = 600; c.height = 200; const g = c.getContext('2d');
+  g.strokeStyle = '#1a237e'; g.lineWidth = 5; g.lineCap = 'round'; g.beginPath(); g.moveTo(30, 140); g.bezierCurveTo(120, 10, 160, 220, 250, 90); g.bezierCurveTo(300, 20, 330, 190, 400, 100); g.bezierCurveTo(450, 40, 500, 160, 570, 70); g.stroke();
+  const img = new Uint8Array(await (await new Promise((r) => c.toBlob(r, 'image/png'))).arrayBuffer());
+  const cert = (await native.certs.list())[0];
+  const certShort = cert.fingerprint.replace(/:/g, '').slice(0, 16).replace(/(.{4})(?=.)/g, '$1 ');
+  const common = { name: cert.name, dateText: '11.11.2026, 15:30', certId: certShort, detail: cert.organization };
+  const base = { certId: id, password: 'geheim1', reason: 'Ich stimme dem Inhalt dieses Dokuments zu.', location: 'Hannover', protocol: true, fileName: 'Maklervertrag Musterstraße 12.pdf' };
+  let signed;
+  await step('sign stamp', async () => { const r = await native.signPdf(pdf, { ...base, timestamp: false, visible: { ...common, mode: 'stamp', pageIndex: 0, rect: [333, 700, 226, 60] } }); signed = r.data; await testApi.write('signed-stamp.pdf', r.data); });
+  await step('sign image', async () => { const r = await native.signPdf(pdf, { ...base, timestamp: false, visible: { ...common, mode: 'signature', caption: true, pageIndex: 0, rect: [330, 690, 200, 84], image: img } }); await testApi.write('signed-image.pdf', r.data); });
+  await step('sign image nocaption', async () => { const r = await native.signPdf(pdf, { ...base, timestamp: false, protocol: false, visible: { ...common, mode: 'signature', caption: false, pageIndex: 0, rect: [330, 690, 200, 60], image: img } }); await testApi.write('signed-plain.pdf', r.data); });
+  await step('sign invisible + tsa', async () => { localStorage.setItem('pdfeditor.tsa', location.origin + '/__tsa'); const r = await native.signPdf(pdf, { ...base, timestamp: true }); await testApi.write('signed-tsa.pdf', r.data); localStorage.removeItem('pdfeditor.tsa'); if (!r.timestamp || r.timestamp.error) throw new Error('TS: ' + JSON.stringify(r.timestamp)); return r.timestamp.time; });
+  await step('second signature', async () => { const r = await native.signPdf(signed, { ...base, timestamp: false, visible: { ...common, mode: 'stamp', pageIndex: 0, rect: [60, 700, 226, 60] } }); await testApi.write('signed-twice.pdf', r.data); const v = await native.verifyPdf(r.data); if (v.length !== 2 || !v.every((s) => s.ok)) throw new Error(JSON.stringify(v).slice(0, 600)); });
+  await step('verify', async () => { const v = await native.verifyPdf(signed); const s = v[0]; if (!s.ok) throw new Error(JSON.stringify(v).slice(0, 800)); return JSON.stringify(Object.keys(s)); });
+  await step('verify tampered', async () => { const t = signed.slice(); const i = 2000; t[i] ^= 1; const v = await native.verifyPdf(t); if (v[0].ok) throw new Error('tampered accepted'); });
+  await testApi.done(R);
+})().catch((e) => testApi.done({ fatal: String(e && e.stack || e) }));
